@@ -28,10 +28,15 @@ The following features are currently in development or planned:
 * NumPy
 * PyTorch (Optional, but recommended)
 
+### Build from Pypi
+```bash
+pip install line-seg-eval
+```
+
 ### Build from Source
 ```bash
 git clone https://github.com/SebastianJanampa/line_segment_eval.git
-cd faster-line-segment-eval
+cd line-segment-eval
 
 # Install in editable mode (recommended for development)
 pip install -e .
