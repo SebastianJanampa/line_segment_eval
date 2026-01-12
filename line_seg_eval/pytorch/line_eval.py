@@ -3,8 +3,9 @@ try:
     _has_torch = True
 except ImportError:
     _has_torch = False
+import numpy as np
 
-from line_seg_eval import LINEeval
+from line_seg_eval import LINEeval_heatmap, LINEeval_endpoints
 
 def _to_numpy(data):
     if _has_torch and isinstance(data, torch.Tensor):
@@ -52,20 +53,20 @@ def _prepare_data(lines, scores=None, labels=None):
 
 
 class LineEvaluator:
-    def __init__(self, metrics=['lines', 'masks']):
+    def __init__(self, metrics=['endpoints', 'heatmap']):
         """
         metrics: list of data types to evaluate.
         """
         self.evaluators = {}
 
         # Initialize Workers based on requested types
-        if 'lines' in metrics:
-            self.evaluators['lines'] = LINEeval(thresholds=[5, 10, 15])
+        if 'endpoints' in metrics:
+            self.evaluators['endpoints'] = LINEeval_endpoints(thresholds=[5, 10, 15])
 
-        if 'masks' in metrics:
+        if 'heatmap' in metrics:
             # Future expansion
-            # self.evaluators['masks'] = COCOeval_masks(...)
-            pass
+            img_size = 128 # this is the default in many line segment detectors
+            self.evaluators['heatmap'] = LINEeval_heatmap(img_size, img_size)
 
     def reset(self):
         for evaluator in self.evaluators.values():
@@ -78,47 +79,46 @@ class LineEvaluator:
         batch_size = len(ground_truths)
 
         # Check which keys to process
-        process_lines = 'lines' in self.evaluators
 
         for i in range(batch_size):
             gt_item = ground_truths[i]
 
             # --- LINES HANDLING ---
-            if process_lines:
-                # 1. Extract Raw Data
-                raw_gt = gt_item['lines']
-                raw_gt_labels = gt_item.get('labels', None)
+            # 1. Extract Raw Data
+            raw_gt = gt_item['lines']
+            raw_gt_labels = gt_item.get('labels', None)
 
-                # Handle dictionary naming variations
-                if 'pred_lines' in predictions:
-                    raw_dt = predictions['pred_lines'][i]
-                else:
-                    raw_dt = predictions['lines'][i]  # Fallback
+            # Handle dictionary naming variations
+            if 'lines' in predictions:
+                raw_dt = predictions['lines'][i]  # Fallback
+            elif 'pred_lines' in predictions:
+                raw_dt = predictions['pred_lines'][i]
+            else:
+                raise ValueError("Predictions missing 'lines' or 'pred_lines'")
 
-                if 'scores' in predictions:
-                    raw_scores = predictions['scores'][i]
-                elif 'pred_logits' in predictions:
-                    raw_scores = predictions['pred_logits'][i]
-                else:
-                    raise ValueError("Predictions missing 'scores' or 'pred_logits'")
 
-                raw_dt_labels = None
-                if 'labels' in predictions:
-                    raw_dt_labels = predictions['labels'][i]
-                elif 'pred_classes' in predictions:
-                    raw_dt_labels = predictions['pred_classes'][i]
+            if 'scores' in predictions:
+                raw_scores = predictions['scores'][i]
+            elif 'pred_logits' in predictions:
+                raw_scores = predictions['pred_logits'][i]
+            else:
+                raise ValueError("Predictions missing 'scores' or 'pred_logits'")
 
-                # 2. Prepare
-                gt_lines, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
-                dt_lines, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
+            if 'labels' in predictions:
+                raw_dt_labels = predictions['labels'][i]
+            elif 'pred_labels' in predictions:
+                raw_dt_labels = predictions['pred_labels'][i]
+            else:
+                raise ValueError("Predictions missing 'labels' or 'pred_labels'")
 
-                if len(dt_lines) > 0:
+            # 2. Prepare
+            gt_lines, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
+            dt_lines, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
+
+            if len(dt_lines) > 0:
+                for metric in self.evaluators:
                     # 3. Dispatch to Worker
-                    self.evaluators['lines'].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
-
-            # --- MASKS HANDLING (Future) ---
-            # if 'masks' in self.evaluators:
-            #     ... extract and dispatch masks ...
+                    self.evaluators[metric].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
 
     def accumulate(self):
         """

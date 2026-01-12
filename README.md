@@ -1,8 +1,15 @@
-# Faster Line Segment Evaluation
+# Line Segment Evaluation
 
 A high-performance, C++ optimized library for evaluating line segment detection models. This library serves as a drop-in evaluation engine that computes **Structural Average Precision (sAP)** and **F1 Scores** significantly faster than pure Python implementations.
 
 Designed with a modular architecture similar to `pycocotools`, it supports batch processing, incremental updates, and global accumulation of metrics.
+
+## ✅ TODO
+
+The following features are currently in development or planned:
+
+- [ ] **Heatmap Metrics (APh / Fh):** Pixel-level evaluation using C++ rasterization (Bresenham's algorithm). Currently disabled due to mismatching with DT-LSD reported results.
+
 
 ## 🚀 Features
 

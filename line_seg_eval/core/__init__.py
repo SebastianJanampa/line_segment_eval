@@ -1,1 +1,2 @@
-from .line_eval import LINEeval
+from .heatmap_metric import LINEeval_heatmap
+from .endpoints_metric import LINEeval_endpoints

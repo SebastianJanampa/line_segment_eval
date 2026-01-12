@@ -4,7 +4,7 @@ from collections import defaultdict
 from line_seg_eval import _C
 
 
-class LINEeval:
+class LINEeval_endpoints:
     def __init__(self, thresholds=[5, 10, 15]):
         """
         Worker class for Line Evaluation.
@@ -28,8 +28,8 @@ class LINEeval:
 
     def update(self, dt_lines, dt_scores, dt_labels, gt_lines, gt_labels):
         """
-                Runs matching. C++ handles the "Class == Class" check.
-                """
+        Runs matching. C++ handles the "Class == Class" check.
+        """
         # 1. Update GT Counts Per Class
         if len(gt_labels) > 0:
             unique, counts = np.unique(gt_labels, return_counts=True)
@@ -106,7 +106,7 @@ class LINEeval:
 
         # Storage for Mean calculation
         aps_per_thresh = {t: [] for t in self.thresholds}
-        f1s_per_thresh = {t: [] for t in self.thresholds}
+        sfs_per_thresh = {t: [] for t in self.thresholds}
 
         # --- 1. Per-Class Loop ---
         for cls_id in unique_classes:

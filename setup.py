@@ -22,11 +22,16 @@ def get_ext_modules():
     # Define the Extension
     ext_modules = [
         Extension(
-            "line_seg_eval._C",  # The import name in Python
-            ["csrc/_line_seg_eval.cpp"],  # Source file
+            "line_seg_eval._C",
+            [
+                "csrc/bindings.cpp",
+                "csrc/LineMatcher.cpp",
+                "csrc/HeatmapMatcher.cpp"
+            ],
             include_dirs=[
                 pybind11.get_include(),
-                np.get_include()
+                np.get_include(),
+                "csrc"  # Add 'csrc' so they can find their own headers
             ],
             extra_compile_args=["-O3", "-Wall", "-std=c++14"],
             language="c++",
