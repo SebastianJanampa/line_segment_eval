@@ -22,4 +22,4 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/SebastianJanampa/line_seg_eval"
+Homepage = "https://github.com/SebastianJanampa/line_segment_eval"
