@@ -36,10 +36,17 @@ public:
     py::dict match_lines(
         py::array_t<float> dt_lines,
         py::array_t<float> gt_lines,
+        py::array_t<int> dt_labels,
+        py::array_t<int> gt_labels,
         std::vector<float> thresholds
     ) {
         auto r_dt = dt_lines.unchecked<3>();
         auto r_gt = gt_lines.unchecked<3>();
+
+        // Handle Labels
+        bool use_labels = (dt_labels.size() > 0 && gt_labels.size() > 0);
+        auto r_dt_lbl = dt_labels.unchecked<1>();
+        auto r_gt_lbl = gt_labels.unchecked<1>();
 
         ssize_t N = r_dt.shape(0);
         ssize_t M = r_gt.shape(0);
@@ -62,13 +69,21 @@ public:
 
             std::vector<bool> gt_used(M, false);
 
-            // Greedy Matching Loop
             for (ssize_t i = 0; i < N; ++i) {
                 float min_dist = std::numeric_limits<float>::max();
                 ssize_t best_gt_idx = -1;
                 const float* p_line = r_dt.data(i, 0, 0);
 
+                // Get label for current prediction if using labels
+                int p_label = use_labels ? r_dt_lbl(i) : -1;
+
                 for (ssize_t j = 0; j < M; ++j) {
+                    // 1. CLASS CHECK (Fast fail)
+                    if (use_labels) {
+                        if (p_label != r_gt_lbl(j)) continue;
+                    }
+
+                    // 2. DISTANCE CHECK
                     const float* g_line = r_gt.data(j, 0, 0);
                     float dist = compute_line_distance(p_line, g_line);
 
@@ -78,6 +93,7 @@ public:
                     }
                 }
 
+                // Match Logic
                 if (min_dist <= thresh && best_gt_idx != -1 && !gt_used[best_gt_idx]) {
                     ptr_tp(i) = 1;
                     gt_used[best_gt_idx] = true;
@@ -86,8 +102,6 @@ public:
                 }
             }
 
-            // Key is the threshold as a string (e.g., "5.0")
-            // converting float to int string to match Python keys "5", "10"
             std::string key = std::to_string((int)thresh);
             results[key.c_str()] = py::make_tuple(tp, fp);
         }

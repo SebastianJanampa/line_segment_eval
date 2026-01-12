@@ -1,4 +1,55 @@
+try:
+    import torch
+    _has_torch = True
+except ImportError:
+    _has_torch = False
+
 from line_seg_eval import LINEeval
+
+def _to_numpy(data):
+    if _has_torch and isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return np.asarray(data)
+
+def _prepare_data(lines, scores=None, labels=None):
+    """
+    Standardizes inputs:
+    1. Converts to NumPy
+    2. Reshapes Lines [N, 2, 2]
+    3. Scales/Flips Lines
+    4. Sorts ALL arrays by Score (Descending)
+    """
+    # --- 1. Lines ---
+    lines = _to_numpy(lines)
+    if lines.ndim == 2: lines = lines.reshape(-1, 2, 2)
+    lines = lines[..., ::-1] * 128.0  # Scale & Flip
+
+    if scores is None:# For Ground Truths: Just return lines and labels
+        clean_labels = np.array([], dtype=np.int32)
+        if labels is not None:
+            clean_labels = _to_numpy(labels).astype(np.int32)
+        return lines, None, clean_labels
+
+    # --- 2. Scores ---
+    scores = _to_numpy(scores)
+    if scores.ndim > 1:
+        scores = scores[..., 0]
+
+    # --- 3. Sorting ---
+    # We must sort lines and labels based on the score order
+    idx = np.argsort(-scores, kind='mergesort')
+
+    sorted_lines = lines[idx]
+    sorted_scores = scores[idx]
+
+    # --- 4. Labels (Optional) ---
+    sorted_labels = np.array([], dtype=np.int32)
+    if labels is not None:
+        labels = _to_numpy(labels).astype(np.int32)
+        sorted_labels = labels[idx]
+
+    return sorted_lines, sorted_scores, sorted_labels
+
 
 class LineEvaluator:
     def __init__(self, metrics=['lines', 'masks']):
@@ -36,6 +87,7 @@ class LineEvaluator:
             if process_lines:
                 # 1. Extract Raw Data
                 raw_gt = gt_item['lines']
+                raw_gt_labels = gt_item.get('labels', None)
 
                 # Handle dictionary naming variations
                 if 'pred_lines' in predictions:
@@ -50,13 +102,19 @@ class LineEvaluator:
                 else:
                     raise ValueError("Predictions missing 'scores' or 'pred_logits'")
 
-                # 2. Prepare Data (Scale, Flip, Sort)
-                gt_lines, _ = _prepare_lines(raw_gt)
-                dt_lines, dt_scores = _prepare_lines(raw_dt, raw_scores)
+                raw_dt_labels = None
+                if 'labels' in predictions:
+                    raw_dt_labels = predictions['labels'][i]
+                elif 'pred_classes' in predictions:
+                    raw_dt_labels = predictions['pred_classes'][i]
+
+                # 2. Prepare
+                gt_lines, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
+                dt_lines, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
 
                 if len(dt_lines) > 0:
                     # 3. Dispatch to Worker
-                    self.evaluators['lines'].update(dt_lines, dt_scores, gt_lines)
+                    self.evaluators['lines'].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
 
             # --- MASKS HANDLING (Future) ---
             # if 'masks' in self.evaluators:
