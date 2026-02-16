@@ -7,11 +7,11 @@ namespace py = pybind11;
 
 class HeatmapMatcher {
 public:
-    int H, W;
-    HeatmapMatcher(int height, int width);
-
+    HeatmapMatcher();
     py::tuple evaluate_sequence(
         py::array_t<float> dt_lines, 
-        py::array_t<float> gt_lines
+        py::array_t<float> gt_lines,
+        int H, 
+        int W
     );
 };

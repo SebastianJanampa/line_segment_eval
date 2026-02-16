@@ -26,7 +26,8 @@ def get_ext_modules():
             [
                 "csrc/bindings.cpp",
                 "csrc/LineMatcher.cpp",
-                "csrc/HeatmapMatcher.cpp"
+                "csrc/HeatmapMatcher.cpp",
+                "csrc/LinePostprocessor.cpp"
             ],
             include_dirs=[
                 pybind11.get_include(),

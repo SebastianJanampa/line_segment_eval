@@ -5,15 +5,13 @@ from line_seg_eval import _C
 
 
 class LINEeval_heatmap:
-    def __init__(self, height=128, width=128):
-        self.H = height
-        self.W = width
-        self.matcher = _C.HeatmapMatcher(height, width)
+    def __init__(self):
+        self.matcher = _C.HeatmapMatcher()
 
         self.fixed_thresholds = [
-            0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.525, 0.55, 0.575, 0.6, 
-            0.625, 0.65, 0.675, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99, 
-            0.995, 0.999, 0.9995, 0.9999
+            0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.525, 0.55, 0.575, 
+            0.6, 0.625, 0.65, 0.675, 0.7, 0.8, 0.9, 0.95, 
+            0.97, 0.99, 0.995, 0.999, 0.9995, 0.9999
         ]
 
         self.reset()
@@ -23,7 +21,7 @@ class LINEeval_heatmap:
         # Structure: { class_id: { 'dt_stats': [(score, tp_pix, fp_pix), ...], 'total_gt_pix': 0 } }
         self.class_results = defaultdict(lambda: {'dt_stats': [], 'total_gt_pix': 0})
 
-    def update(self, dt_lines, dt_scores, dt_labels, gt_lines, gt_labels):
+    def update(self, dt_lines, dt_scores, dt_labels, gt_lines, gt_labels, height, width):
         """
         Process ONE BATCH. 
         Crucial: We must process each image separately for rasterization.
@@ -48,7 +46,7 @@ class LINEeval_heatmap:
 
             # C++ Rasterization (Per Image)
             # Returns: (tp_counts_array, fp_counts_array, total_gt_pixels_int)
-            tp_counts, fp_counts, total_pixels = self.matcher.evaluate_sequence(cls_dt_lines, cls_gt_lines)
+            tp_counts, fp_counts, total_pixels = self.matcher.evaluate_sequence(cls_dt_lines, cls_gt_lines, height, width)
             
             # Store Statistics
             # We pack (score, tp, fp) for every predicted line

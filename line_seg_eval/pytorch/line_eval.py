@@ -6,6 +6,7 @@ except ImportError:
 import numpy as np
 
 from line_seg_eval import LINEeval_heatmap, LINEeval_endpoints
+from line_seg_eval import _C
 
 def _to_numpy(data):
     if _has_torch and isinstance(data, torch.Tensor):
@@ -51,13 +52,14 @@ def _prepare_data(lines, scores=None, labels=None):
 
     return sorted_lines, sorted_scores, sorted_labels
 
-
 class LineEvaluator:
-    def __init__(self, metrics=['endpoints', 'heatmap']):
+    def __init__(self, metrics=['endpoints', 'heatmap'], do_postprocess=True, nms_thresh=0.01):
         """
         metrics: list of data types to evaluate.
         """
         self.evaluators = {}
+        self.do_postprocess = do_postprocess
+        self.nms_thresh = nms_thresh
 
         # Initialize Workers based on requested types
         if 'endpoints' in metrics:
@@ -66,7 +68,7 @@ class LineEvaluator:
         if 'heatmap' in metrics:
             # Future expansion
             img_size = 128 # this is the default in many line segment detectors
-            self.evaluators['heatmap'] = LINEeval_heatmap(img_size, img_size)
+            self.evaluators['heatmap'] = LINEeval_heatmap()
 
     def reset(self):
         for evaluator in self.evaluators.values():
@@ -112,13 +114,57 @@ class LineEvaluator:
                 raise ValueError("Predictions missing 'labels' or 'pred_labels'")
 
             # 2. Prepare
-            gt_lines, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
-            dt_lines, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
+            gt_lines_128, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
+            dt_lines_128, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
 
-            if len(dt_lines) > 0:
-                for metric in self.evaluators:
-                    # 3. Dispatch to Worker
-                    self.evaluators[metric].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
+            if len(dt_lines_128) == 0:
+                continue
+                
+            for metric in self.evaluators:
+                # 3. Dispatch to Worker
+                if metric == 'heatmap':
+                    # Extract original dimensions (fallback to 128)
+                    h, w = _to_numpy(gt_item.get('size', [128, 128]))
+                    
+                    # Create isolated copies for the heatmap
+                    gt_lines_hm = gt_lines_128
+                    dt_lines_hm = dt_lines_128
+                    dt_scores_hm = dt_scores
+
+                    # Scale to Real Image Dimensions
+                    if len(dt_lines_hm) > 0:
+                        gt_lines_hm[:, :, 0] *= (h / 128.0)  # Y
+                        gt_lines_hm[:, :, 1] *= (w / 128.0)  # X
+                        dt_lines_hm[:, :, 0] *= (h / 128.0)  # Y
+                        dt_lines_hm[:, :, 1] *= (w / 128.0)  # X
+                        
+                    # Apply C++ Postprocessing (Clipping) EXCLUSIVELY for Heatmap
+                    if self.do_postprocess and len(dt_lines_hm) > 0:
+                        diag_real = np.sqrt(h**2 + w**2)
+                        clip_thresh = diag_real * self.nms_thresh
+                        
+                        dt_lines_hm, dt_scores_hm = _C.postprocess(
+                            dt_lines_hm.astype(np.float32), 
+                            dt_scores_hm.astype(np.float32), 
+                            clip_thresh, 0, False
+                        )
+                        # Create generic labels since postprocess reshapes the arrays
+                        dt_labels_hm = np.zeros(len(dt_lines_hm), dtype=np.int32)
+                    else:
+                        dt_labels_hm = dt_labels
+                    
+                    self.evaluators[metric].update(
+                            dt_lines_hm, dt_scores_hm, dt_labels_hm, 
+                            gt_lines_hm, gt_labels, h, w
+                        )
+
+                elif metric == 'endpoints':
+                    # sAP uses the RAW, unclipped 128x128 representations
+                    self.evaluators[metric].update(
+                        dt_lines_128, dt_scores, dt_labels, 
+                        gt_lines_128, gt_labels
+                    )
+                #self.evaluators[metric].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
 
     def accumulate(self):
         """
