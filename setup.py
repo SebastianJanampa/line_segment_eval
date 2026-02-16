@@ -45,7 +45,7 @@ def get_ext_modules():
 try:
     setup(
         name="line_seg_eval",
-        version="0.1.1",
+        version="0.1.2",
         packages=find_packages(),
         ext_modules=get_ext_modules(),
         zip_safe=False,

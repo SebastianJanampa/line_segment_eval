@@ -13,7 +13,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "line_seg_eval"
-version = "0.1.1"
+version = "0.1.2"
 description = "High-performance Line Detection Evaluation (sAP, F1)"
 readme = "README.md"
 requires-python = ">=3.8"
