@@ -30,7 +30,7 @@ pip install line-seg-eval
 ### Build from Source
 ```bash
 git clone https://github.com/SebastianJanampa/line_segment_eval.git
-cd line-segment-eval
+cd line_segment_eval
 
 # Install in editable mode (recommended for development)
 pip install -e .
@@ -47,13 +47,15 @@ and ground truths, and finally summarize the results.
 from line_seg_eval.pytorch import LineEvaluator
 
 # 1. Initialize
-# metrics=['lines'] enables sAP and F1 calculation
+# 'endpoints' enables sAP and sF; 'heatmap' enables APh and Fh
 evaluator = LineEvaluator(metrics=['endpoints', 'heatmap'], 
     do_postprocess=True, 
-    nms_thresh=0.01
+    nms_thresh=0.01,
+    img_size=128.0
 )
 
 # 2. Training/Validation Loop
+evaluator.reset()  # Clear state from any previous epoch
 for batch in dataloader:
     predictions = model(batch['image'])  # Your model output
     targets = batch['targets']           # Ground truth list
@@ -67,6 +69,19 @@ for batch in dataloader:
 evaluator.accumulate()  # Global sort and merge
 evaluator.summarize()   # Print table of results
 ```
+
+Call `reset()` before each evaluation pass. The evaluator accumulates across `update()`
+calls by design, so without it a second epoch is scored on top of the first.
+
+### Constructor Arguments
+
+| Argument | Default | Description |
+| :--- | :--- | :--- |
+| `metrics` | `['endpoints', 'heatmap']` | Which metrics to compute. Unrecognized names are ignored, so a typo yields an evaluator that silently measures nothing. |
+| `do_postprocess` | `True` | Apply Collinear Line Clipping before the heatmap metric. Does not affect `endpoints`. |
+| `nms_thresh` | `0.01` | Clipping tolerance, as a fraction of the image diagonal. |
+| `img_size` | `128.0` | Spatial resolution the normalized input coordinates are scaled to for the structural metrics. |
+
 ### Expected Input Format
 
 **Predictions (`dict`):**
@@ -84,10 +99,32 @@ A list where each item corresponds to one image in the batch.
 | :--- | :--- | :--- |
 | `lines` | `[M, 2, 2]` or `[M, 4]` | Ground truth segments |
 | `labels`| `[M]` | (Optional) Ground truth class labels |
-| `height`| `int` | **Required for Heatmap:** Original image height (e.g., 512) |
-| `width` | `int` | **Required for Heatmap:** Original image width (e.g., 512) |
+| `size`  | `[2]` | **Required for Heatmap:** original image size as `(height, width)`, e.g. `[512, 512]`. Falls back to `[128, 128]` when absent, which silently rescales the heatmap metrics — pass it whenever `'heatmap'` is enabled. |
 
-*Note: Coordinates are automatically scaled and flipped geometrically within the library to match standard benchmarks. Endpoints are evaluated at a fixed 128x128 scale, while Heatmap metrics are evaluated at the original image resolution (`height` and `width`).*
+*Note: Coordinates are automatically scaled and flipped geometrically within the library to match standard benchmarks. Endpoints are evaluated at the `img_size` scale (128x128 by default), while Heatmap metrics are evaluated at the original image resolution taken from `size`.*
+
+### Reading Results Programmatically
+
+`summarize()` prints a table, but it also leaves the numbers on each worker's `stats`
+dict, which is what you want inside a training loop:
+
+```python
+evaluator.accumulate()
+evaluator.summarize()
+
+endpoint_stats = evaluator.evaluators['endpoints'].stats
+# {'sAP_5': 58.4, 'sAP_10': 64.1, 'sAP_15': 66.9,
+#  'sF_5': 62.0, 'sF_10': 67.3, 'sF_15': 69.5}
+
+heatmap_stats = evaluator.evaluators['heatmap'].stats
+# {'AP': 81.2, 'F': 79.6}
+
+all_stats = endpoint_stats | heatmap_stats
+```
+
+Values are class-averaged floats on a 0-100 scale. The keys are only populated by
+`summarize()`, so call it before reading them; the `sAP_*`/`sF_*` keys follow whatever
+`thresholds` the endpoint worker was built with.
 
 ## 📊 Metrics Explained
 

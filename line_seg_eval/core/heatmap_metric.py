@@ -1,3 +1,4 @@
+"""Heatmap-based line metric: rasterizes lines and scores overlapping pixels."""
 import numpy as np
 
 from collections import defaultdict
@@ -5,7 +6,15 @@ from line_seg_eval import _C
 
 
 class LINEeval_heatmap:
+    """Computes heatmap average precision (APh) and peak F-score (Fh) per class.
+
+    Rather than matching whole segments, each predicted and ground-truth line is
+    rasterized and scored pixel by pixel, so partially correct lines earn partial credit.
+    Per-image statistics accumulate across `update` calls and are reduced in `summarize`.
+    """
+
     def __init__(self):
+        """Creates the C++ rasterizing matcher and clears the accumulators."""
         self.matcher = _C.HeatmapMatcher()
 
         self.fixed_thresholds = [
@@ -17,14 +26,26 @@ class LINEeval_heatmap:
         self.reset()
 
     def reset(self):
+        """Clears the per-class pixel statistics, readying a fresh evaluation."""
         # Store results globally across all images
         # Structure: { class_id: { 'dt_stats': [(score, tp_pix, fp_pix), ...], 'total_gt_pix': 0 } }
         self.class_results = defaultdict(lambda: {'dt_stats': [], 'total_gt_pix': 0})
+        self.stats = {}
 
     def update(self, dt_lines, dt_scores, dt_labels, gt_lines, gt_labels, height, width):
-        """
-        Process ONE BATCH. 
-        Crucial: We must process each image separately for rasterization.
+        """Rasterizes one image's lines and records per-prediction pixel hit counts.
+
+        Called once per image, since rasterization needs that image's dimensions. Missing
+        labels are treated as all class 0.
+
+        Args:
+            dt_lines: (N, 2, 2) predicted endpoints in (y, x) order, in image pixels
+            dt_scores: (N,) confidence scores, descending
+            dt_labels: (N,) predicted class labels; may be empty
+            gt_lines: (M, 2, 2) ground-truth endpoints in the same form
+            gt_labels: (M,) ground-truth class labels; may be empty
+            height: image height in pixels
+            width: image width in pixels
         """
         # Note: The 'update' in LineEvaluator is called per-image inside a loop.
         # So 'dt_lines' here corresponds to ONE image.
@@ -56,10 +77,16 @@ class LINEeval_heatmap:
             self.class_results[cls]['total_gt_pix'] += total_pixels
 
     def accumulate(self):
+        """No-op: statistics are already accumulated as each image is processed."""
         # Data is already accumulated in `self.class_results` during update
         pass
     
     def summarize(self):
+        """Builds each class's precision-recall curve, prints APh and Fh, and stores them.
+
+        Results land in `self.stats` under 'AP' and 'F', averaged over classes, which is
+        what the validator reads.
+        """
         print("\n" + "="*50)
         print(f"{'Class':<10} | {'APh':<10} | {'Fh':<10}")
         print("-" * 50)
@@ -103,12 +130,30 @@ class LINEeval_heatmap:
         
         print("-" * 50)
         if aps:
-            print(f"{'MEAN':<10} | {np.mean(aps):<10.1f} | {np.mean(fhs):<10.1f}")
+            mean_ap = float(np.mean(aps))
+            mean_fh = float(np.mean(fhs))
+            print(f"{'MEAN':<10} | {mean_ap:<10.1f} | {mean_fh:<10.1f}")
+            self.stats['AP'] = mean_ap
+            self.stats['F'] = mean_fh
         else:
             print(f"{'MEAN':<10} | {0.0:<10.1f} | {0.0:<10.1f}")
+            self.stats['AP'] = 0.0
+            self.stats['F'] = 0.0
         print("="*50 + "\n")
 
     def _auc(self, recall, precision):
+        """Computes average precision as the area under an interpolated PR curve.
+
+        Precision is made monotonically decreasing before integrating, the standard
+        all-points interpolation.
+
+        Args:
+            recall: recall values, ascending
+            precision: precision values matching `recall`
+
+        Returns:
+            ap: the area under the interpolated curve, in [0, 1]
+        """
         mrec = np.concatenate(([0.0], recall, [1.0]))
         mpre = np.concatenate(([0.0], precision, [0.0]))
         mpre = np.maximum.accumulate(mpre[::-1])[::-1]

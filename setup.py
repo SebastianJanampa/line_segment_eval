@@ -1,3 +1,4 @@
+"""Build script for the line_seg_eval package and its C++ extension."""
 import os
 import sys
 
@@ -6,16 +7,31 @@ from setuptools import setup, Extension, find_packages
 
 # Delayed imports to ensure build-system requirements are installed first
 class BuildExt(object):
+    """Placeholder build helper, kept for compatibility and currently unused."""
+
     def __init__(self):
+        """Creates an empty extension list."""
         self.extensions = []
 
 # Read the contents of your README file
 def readme():
+    """Reads README.md for use as the package long description.
+
+    Returns:
+        content: the file's contents as text
+    """
     with open("README.md", encoding="utf-8") as f:
         content = f.read()
     return content
 
 def get_ext_modules():
+    """Declares the pybind11 C++ extension that backs the metrics.
+
+    Imports pybind11 and NumPy lazily so a metadata-only call does not require them.
+
+    Returns:
+        ext_modules: list holding the `line_seg_eval._C` extension
+    """
     import pybind11
     import numpy as np
 

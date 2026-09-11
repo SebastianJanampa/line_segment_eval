@@ -1,3 +1,4 @@
+"""LineEvaluator: converts model outputs into the form each metric expects."""
 try:
     import torch
     _has_torch = True
@@ -9,22 +10,41 @@ from line_seg_eval import LINEeval_heatmap, LINEeval_endpoints
 from line_seg_eval import _C
 
 def _to_numpy(data):
+    """Converts a torch tensor or array-like to a NumPy array.
+
+    Args:
+        data: a torch tensor, NumPy array, or anything np.asarray accepts
+
+    Returns:
+        array: the data as a NumPy array, detached and moved to CPU if it was a tensor
+    """
     if _has_torch and isinstance(data, torch.Tensor):
         return data.detach().cpu().numpy()
     return np.asarray(data)
 
-def _prepare_data(lines, scores=None, labels=None):
-    """
-    Standardizes inputs:
-    1. Converts to NumPy
-    2. Reshapes Lines [N, 2, 2]
-    3. Scales/Flips Lines
-    4. Sorts ALL arrays by Score (Descending)
+def _prepare_data(lines, scores=None, labels=None, img_size=128.0):
+    """Normalizes lines, scores and labels into the layout the metrics expect.
+
+    Converts to NumPy, reshapes lines to (N, 2, 2), swaps each point to (y, x) order and
+    scales to `img_size`. When scores are given, all three arrays are sorted by descending
+    score, which the average-precision metrics rely on.
+
+    Args:
+        lines: (N, 4) or (N, 2, 2) line endpoints normalized to [0, 1]
+        scores: (N,) confidence scores; None marks the input as ground truth, which is
+            returned unsorted
+        labels: (N,) class labels, optional
+        img_size: side length the normalized coordinates are scaled to
+
+    Returns:
+        lines: (N, 2, 2) endpoints in (y, x) order, scaled to `img_size`
+        scores: (N,) scores in descending order, or None for ground truth
+        labels: (N,) labels in the matching order, empty when none were given
     """
     # --- 1. Lines ---
     lines = _to_numpy(lines)
     if lines.ndim == 2: lines = lines.reshape(-1, 2, 2)
-    lines = lines[..., ::-1] * 128.0  # Scale & Flip
+    lines = lines[..., ::-1] * img_size  # Scale & Flip
 
     if scores is None:# For Ground Truths: Just return lines and labels
         clean_labels = np.array([], dtype=np.int32)
@@ -53,13 +73,27 @@ def _prepare_data(lines, scores=None, labels=None):
     return sorted_lines, sorted_scores, sorted_labels
 
 class LineEvaluator:
-    def __init__(self, metrics=['endpoints', 'heatmap'], do_postprocess=True, nms_thresh=0.01):
-        """
-        metrics: list of data types to evaluate.
+    """Runs several line-segment metrics over a stream of prediction batches.
+
+    Owns one worker per requested metric and feeds each the representation it needs: the
+    endpoint metrics score raw coordinates at `img_size`, while the heatmap metric scores
+    coordinates rescaled to the original image and optionally NMS-clipped.
+    """
+
+    def __init__(self, metrics=['endpoints', 'heatmap'], do_postprocess=True, nms_thresh=0.01, img_size=128.0):
+        """Builds one worker per requested metric.
+
+        Args:
+            metrics: which metrics to compute, any of 'endpoints' and 'heatmap'
+            do_postprocess: whether to run the C++ NMS-style clipping before the heatmap
+                metric
+            nms_thresh: clipping threshold as a fraction of the image diagonal
+            img_size: side length normalized coordinates are scaled to
         """
         self.evaluators = {}
         self.do_postprocess = do_postprocess
         self.nms_thresh = nms_thresh
+        self.img_size = img_size
 
         # Initialize Workers based on requested types
         if 'endpoints' in metrics:
@@ -71,12 +105,26 @@ class LineEvaluator:
             self.evaluators['heatmap'] = LINEeval_heatmap()
 
     def reset(self):
+        """Clears the accumulated state of every metric, readying a fresh evaluation."""
         for evaluator in self.evaluators.values():
             evaluator.reset()
 
     def update(self, predictions, ground_truths):
-        """
-        Updates the internal state with a new batch of data.
+        """Feeds one batch of predictions and targets to every metric.
+
+        Accepts either naming convention for the prediction keys, so raw model output and
+        postprocessed output both work. Images with no surviving predictions are skipped.
+
+        Args:
+            predictions: dict holding lines under 'lines' or 'pred_lines', scores under
+                'scores' or 'pred_logits', and labels under 'labels' or 'pred_labels',
+                each indexable by batch position
+            ground_truths: list of per-image target dicts with 'lines', and optionally
+                'labels' and 'size'
+
+        Raises:
+            ValueError: if the predictions dict carries neither name for lines, scores or
+                labels
         """
         batch_size = len(ground_truths)
 
@@ -114,8 +162,8 @@ class LineEvaluator:
                 raise ValueError("Predictions missing 'labels' or 'pred_labels'")
 
             # 2. Prepare
-            gt_lines_128, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels)
-            dt_lines_128, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels)
+            gt_lines_128, _, gt_labels = _prepare_data(raw_gt, None, raw_gt_labels, img_size=self.img_size)
+            dt_lines_128, dt_scores, dt_labels = _prepare_data(raw_dt, raw_scores, raw_dt_labels, img_size=self.img_size)
 
             if len(dt_lines_128) == 0:
                 continue
@@ -133,10 +181,10 @@ class LineEvaluator:
 
                     # Scale to Real Image Dimensions
                     if len(dt_lines_hm) > 0:
-                        gt_lines_hm[:, :, 0] *= (h / 128.0)  # Y
-                        gt_lines_hm[:, :, 1] *= (w / 128.0)  # X
-                        dt_lines_hm[:, :, 0] *= (h / 128.0)  # Y
-                        dt_lines_hm[:, :, 1] *= (w / 128.0)  # X
+                        gt_lines_hm[:, :, 0] *= (h / self.img_size)  # Y
+                        gt_lines_hm[:, :, 1] *= (w / self.img_size)  # X
+                        dt_lines_hm[:, :, 0] *= (h / self.img_size)  # Y
+                        dt_lines_hm[:, :, 1] *= (w / self.img_size)  # X
                         
                     # Apply C++ Postprocessing (Clipping) EXCLUSIVELY for Heatmap
                     if self.do_postprocess and len(dt_lines_hm) > 0:
@@ -167,17 +215,13 @@ class LineEvaluator:
                 #self.evaluators[metric].update(dt_lines, dt_scores, dt_labels, gt_lines, gt_labels)
 
     def accumulate(self):
-        """
-        Delegates accumulation to all registered workers.
-        """
+        """Tells every metric to turn its accumulated batches into final statistics."""
         for key, evaluator in self.evaluators.items():
             print(f"Accumulating {key}...")
             evaluator.accumulate()
 
     def summarize(self):
-        """
-        Delegates summarization to all registered workers.
-        """
+        """Prints each metric's results, in the metric's own format."""
         for key, evaluator in self.evaluators.items():
             print(f"\nEvaluation Summary: {key.upper()}")
             evaluator.summarize()

@@ -1,3 +1,4 @@
+"""Endpoint-based line metrics: structural average precision (sAP) and F-score."""
 import numpy as np
 
 from collections import defaultdict
@@ -5,15 +6,25 @@ from line_seg_eval import _C
 
 
 class LINEeval_endpoints:
+    """Computes structural AP and F-score by matching whole segments to ground truth.
+
+    A prediction counts as correct when the squared distance between its endpoints and a
+    ground-truth line's falls under a threshold, so several thresholds give sAP5, sAP10
+    and so on. Matching runs in C++; this class accumulates the hits and reduces them.
+    """
+
     def __init__(self, thresholds=[5, 10, 15]):
-        """
-        Worker class for Line Evaluation.
+        """Creates the C++ matcher and clears the accumulators.
+
+        Args:
+            thresholds: endpoint distance thresholds to evaluate at
         """
         self.matcher = _C.LineMatcher()
         self.thresholds = thresholds
         self.reset()
 
     def reset(self):
+        """Clears the accumulated matches, scores and ground-truth counts."""
         # Raw Data Storage
         self.matches = {str(t): {'tp': [], 'fp': []} for t in self.thresholds}
         self.scores = []
@@ -25,10 +36,20 @@ class LINEeval_endpoints:
 
         # Computed Data
         self.eval_data = {}
+        self.stats = {}
 
     def update(self, dt_lines, dt_scores, dt_labels, gt_lines, gt_labels):
-        """
-        Runs matching. C++ handles the "Class == Class" check.
+        """Matches one image's predictions against its ground truth, at every threshold.
+
+        The C++ matcher enforces that a match shares the same class. Missing labels are
+        treated as all class 0.
+
+        Args:
+            dt_lines: (N, 2, 2) predicted endpoints in (y, x) order
+            dt_scores: (N,) confidence scores, descending
+            dt_labels: (N,) predicted class labels; may be empty
+            gt_lines: (M, 2, 2) ground-truth endpoints in the same form
+            gt_labels: (M,) ground-truth class labels; may be empty
         """
         # 1. Update GT Counts Per Class
         if len(gt_labels) > 0:
@@ -60,8 +81,10 @@ class LINEeval_endpoints:
         self.total_gt += len(gt_lines)
 
     def accumulate(self):
-        """
-        Merges batches and sorts globally.
+        """Concatenates every image's matches and sorts them by descending score.
+
+        The global sort is what makes the precision-recall curve meaningful across images
+        rather than within each one.
         """
         if not self.scores:
             print("LINEeval: No predictions to accumulate.")
@@ -88,10 +111,10 @@ class LINEeval_endpoints:
             self.eval_data[k] = {'tp': tp, 'fp': fp}
 
     def summarize(self):
-        """
-        1. Calculates all metrics.
-        2. Prints all sAP values.
-        3. Prints all F1 values.
+        """Prints sAP and sF per class and threshold, and stores the class means.
+
+        Results land in `self.stats` under 'sAP_<t>' and 'sF_<t>', which is what the
+        validator reads.
         """
         unique_classes = sorted(self.gt_counts_per_class.keys())
 
@@ -154,6 +177,7 @@ class LINEeval_endpoints:
         for t in self.thresholds:
             m_ap = np.mean(aps_per_thresh[t]) if aps_per_thresh[t] else 0.0
             mean_row += f"{m_ap:<6.1f} "
+            self.stats[f'sAP_{t}'] = float(m_ap)
 
         mean_row += "| "
 
@@ -161,11 +185,22 @@ class LINEeval_endpoints:
         for t in self.thresholds:
             m_sf = np.mean(sfs_per_thresh[t]) if sfs_per_thresh[t] else 0.0
             mean_row += f"{m_sf:<6.1f} "
+            self.stats[f'sF_{t}'] = float(m_sf)
 
         print(mean_row)
         print("="*95 + "\n")
 
     def _calc_ap(self, tp, fp, total_gt):
+        """Computes average precision from sorted true and false positive flags.
+
+        Args:
+            tp: true-positive flags in descending score order
+            fp: false-positive flags in the same order
+            total_gt: number of ground-truth lines for this class
+
+        Returns:
+            ap: average precision as a percentage, or 0.0 when there are no predictions
+        """
         if len(tp) == 0: return 0.0
         tp_cum = np.cumsum(tp)
         fp_cum = np.cumsum(fp)
@@ -174,6 +209,16 @@ class LINEeval_endpoints:
         return self._auc(recall, precision) * 100.0
 
     def _calc_sf(self, tp, fp, total_gt):
+        """Computes the peak F-score along the precision-recall curve.
+
+        Args:
+            tp: true-positive flags in descending score order
+            fp: false-positive flags in the same order
+            total_gt: number of ground-truth lines for this class
+
+        Returns:
+            sf: the best F-score as a percentage, or 0.0 when there are no predictions
+        """
         if len(tp) == 0: return 0.0
         tp_cum = np.cumsum(tp)
         fp_cum = np.cumsum(fp)
@@ -185,6 +230,18 @@ class LINEeval_endpoints:
         return np.max(f_curve) * 100.0
 
     def _auc(self, recall, precision):
+        """Computes average precision as the area under an interpolated PR curve.
+
+        Precision is made monotonically decreasing before integrating, the standard
+        all-points interpolation.
+
+        Args:
+            recall: recall values, ascending
+            precision: precision values matching `recall`
+
+        Returns:
+            ap: the area under the interpolated curve, in [0, 1]
+        """
         mrec = np.concatenate(([0.0], recall, [1.0]))
         mpre = np.concatenate(([0.0], precision, [0.0]))
         mpre = np.maximum.accumulate(mpre[::-1])[::-1]
